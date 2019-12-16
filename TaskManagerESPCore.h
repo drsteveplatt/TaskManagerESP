@@ -1,14 +1,17 @@
-#ifndef TASKMANAGERRFCORE_H_INCLUDED
-#define TASKMANAGERRFCORE_H_INCLUDED
+#ifndef TASKMANAGERESPCORE_H_INCLUDED
+#define TASKMANAGERESPCORE_H_INCLUDED
 
 #include <TaskManagerCore.h>
+#include <esp_now.h>
+#include <WiFi.h>
+#include <esp_wifi.h>
 
 //#include "Streaming.h"
 //#include "ring.h"
 //#include <setjmp.h>
 
 /*! \file TaskManagerCore.h
-    Header for Arduino TaskManager library
+    Header for Arduino TaskManager ESP communications library
 */
 
 
@@ -21,7 +24,8 @@
     Note that the NRF24's max payload size is 32.  Message overhead is 3 bytes.
 */
 
-#define TASKMGR_MESSAGE_SIZE (32-3)
+#define TASKMGR_MESSAGE_SIZE (250-4)
+#define TASKMGR_MESSAGE_QUEUE_SIZE 10
 
 
 /*!	\struct	_TaskManagerRadioPacket
@@ -29,17 +33,22 @@
 */
 struct _TaskManagerRadioPacket {
 	byte	m_cmd;							//!< Command information
-	byte	m_fromNodeId;						// source node
+	short	m_fromNodeId;						// source node
 	byte	m_fromTaskId;						// source task
 	byte	m_data[TASKMGR_MESSAGE_SIZE];	//! The data being transmitted.
+		// reminder:  signal -> [0] is the signum
+		//			  msg -> [0] is the taskID of the To, data starts at [1]
+		//			  suspend/resume -> [0] is the taskID to suspend/resume
 };
 
-
+// This is where we build MAC data for setting our MAC and pairing setup
+// It has enough constant data that it is easier to just keep one around.
+static byte _TaskManagerMAC[] = { 0xA6, 'T', 'M',  0x45, 0x00, 0x00 };
 
 /**********************************************************************************************************/
 
-/*! \class TaskManagerRF
-    \brief Adds RF24 abilities to TaskManager
+/*! \class TaskManagerESP
+    \brief Adds ESP-32 ESP-Now abilities to TaskManager
 
     Manages a set of cooperative tasks.  This includes round-robin scheduling, yielding, and inter-task
     messaging and signaling.  It also replaces the loop() function in standard Arduino programs.  Nominally,
@@ -48,10 +57,9 @@ struct _TaskManagerRadioPacket {
     Each task has a taskID.  By convention, user tasks' taskID values are in the range [0 127].
 */
 
-class TaskManagerRF: public TaskManager {
+class TaskManagerESP: public TaskManager {
 
 private:
-	RF24*	m_rf24;				// Our radio (dynamically allocated)
 	int		m_myNodeId;			// radio node number. 0 if radio not enabled.
 
 public:
@@ -60,13 +68,13 @@ public:
 	// user never constructs or destructs a TaskManager object
 	/*! \brief Constructor,  Creates an empty task
 	*/
-    TaskManagerRF();
+    TaskManagerESP();
     /*!  \brief Destructor.  Destroys the TaskManager.
 
 	    After calling this, any operations based on the object will fail.  For normal purpoases, destroying the
 	    TaskMgr instance will have serious consequences for the standard loop() routine.
 	*/
-    ~TaskManagerRF();
+    ~TaskManagerESP();
 
 public:
 
@@ -89,7 +97,7 @@ public:
 		\param sigNum -- The value of the signal to be sent
 		\sa yieldForSignal(), sendSignalAll(), addWaitSignal, addAutoWaitSignal()
 	*/
-	bool sendSignal(byte nodeId, byte sigNum);
+	bool sendSignal(short nodeId, byte sigNum);
 
 	/*! \brief Send a signal to all tasks that are waiting for this particular signal.
 
@@ -98,7 +106,7 @@ public:
 		\sa sendSignal(), yieldForSiganl(), addWaitSignal(), addAutoWaitSignal()
 	*/
 
-	bool sendSignalAll(byte nodeId, byte sigNum);
+	bool sendSignalAll(short nodeId, byte sigNum);
 
 	/*! \brief  Sends a string message to a task
 
@@ -116,7 +124,7 @@ public:
 		TASKMGR_MESSAGE_LENGTH-1 characters.
 		\sa yieldForMessage()
 	*/
-	bool sendMessage(byte nodeId, byte taskId, char* message);
+	bool sendMessage(short nodeId, byte taskId, char* message);
 
 	/*! \brief Send a binary message to a task
 
@@ -133,7 +141,7 @@ public:
 		\sa yieldForMessage()
 	*/
 
-	bool sendMessage(byte nodeId, byte taskId, void* buf, int len);
+	bool sendMessage(short nodeId, byte taskId, void* buf, int len);
 
 	/*!	\brief Get source node/task of last message/signal
 
@@ -144,7 +152,7 @@ public:
 		\param[out] fromNodeId -- the nodeId that sent the last message or signal
 		\param[out] fromTaskId -- the taskId that sent the last message or signal
 	*/
-	void getSource(byte& fromNodeId, byte& fromTaskId);
+	void getSource(short& fromNodeId, byte& fromTaskId);
 
 	/*! @} */
 
@@ -161,7 +169,7 @@ public:
 		\note Not implemented.
 		\sa resume()
 	*/
-	bool suspend(byte nodeId, byte taskId);			// node, task
+	bool suspend(short nodeId, byte taskId);			// node, task
 
 	/*!	\brief Resume the given task on the given node
 
@@ -172,12 +180,12 @@ public:
 		\note Not implemented.
 		\sa suspend()
 	*/
-	bool resume(byte nodeId, byte taskId);			// node, task
+	bool resume(short nodeId, byte taskId);			// node, task
 	/*! @} */
 
 
 private:
-	bool radioSender(byte);	// generic packet sender
+	bool radioSender(short);	// generic packet sender
 
     // status requests/
     //void yieldPingNode(byte);					// node -> status (responding/not responding)
@@ -204,6 +212,7 @@ private:
 	};
 	_TaskManagerRadioPacket	radioBuf;
 	bool	m_radioReceiverRunning;
+	esp_err_t m_lastESPError;
 
 public:
 	/*! \brief Radio receiver task for inter-node communication
@@ -216,15 +225,31 @@ public:
 
 	/*! \brief Create the radio and start it receiving
 
-		Create an RF24 radio instance and set our radio node ID.
+		Set up the ESP-32 ESP-Now configuration set our radio node ID.
 
 		Note that additional messages sent prior to the task executing will overwrite any prior messages.
 
 		\param nodeId -- the node the message is sent to
-		\param cePin -- Chip Enable pin
-		\param csPin -- Chip Select pin
 	*/
-	void radioBegin(byte nodeId, byte cePin, byte csPin);
+	bool radioBegin(short nodeId);
+
+	/* \brief Add a peer for ESP-Now communications
+
+		\param nodeID -- A peer node for future communications.
+	*/
+	bool registerPeer(short nodeId);
+
+	/* \brief Get the last ESP error indicator
+
+		Returns an esp_err_t value of the return status of the last completed ESP operation.
+	*/
+	esp_err_t lastESPError() { return m_lastESPError; }
+
+	/* 	\brief Return last ESP error status
+
+		\return The esp_err_t value of the last ESP call.  For normal operations, this will be ESP_OK.
+		If an error had occurred, the error code will be returned.
+	*/
 
 	/*! @name Miscellaneous and Informational Routines */
 	/*! @{ */
@@ -233,30 +258,24 @@ public:
 		\return The byte value that is the current node's radio ID.  If the radio has not been
 		enabled, returns 0.
 	*/
-    byte myNodeId();
+    short myNodeId();
     /*! @} */
 };
 
 //
 // Defining our global TaskMgr
 //
-/*!	\brief The global object used to access TaskManager functionality
-*/
-//#if !defined(TASKMANAGER_MAIN)
-//extern TaskManager TaskMgr;
-//#else
-//TaskManager TaskMgr;
-//#endif
+
 
 //
 // Inline stuff
 //
 
-inline byte TaskManagerRF::myNodeId() {
+inline short TaskManagerESP::myNodeId() {
 	return m_myNodeId;
 }
 
 
-#endif // TASKMANAGERRFCORE_H_INCLUDED
+#endif // TASKMANAGERESPCORE_H_INCLUDED
 
 

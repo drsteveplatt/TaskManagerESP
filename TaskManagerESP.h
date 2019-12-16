@@ -1,10 +1,10 @@
 #ifndef TASKMANAGER_H_INCLUDED
 #define TASKMANAGER_H_INCLUDED
-#define TASKMANAGERRF_H_INCLUDED
+#define TASKMANAGERESP_H_INCLUDED
 
 #include <TaskManagerMacros.h>
-#include <TaskManagerRFCore.h>
-TaskManagerRF TaskMgr;
+#include <TaskManagerESPCore.h>
+TaskManagerESP TaskMgr;
 void loop() {
     TaskMgr.loop();
 }

@@ -1,12 +1,11 @@
 #define TASKMANAGER_MAIN
 
 #include <arduino.h>
-#include <SPI.h>
-#include <RF24.h>
 #include <TaskManagerCore.h>
-#include <TaskManagerRFCore.h>
+#include <TaskManagerESPCore.h>
 
-extern TaskManagerRF TaskMgr;
+
+extern TaskManagerESP TaskMgr;
 
 #include <Streaming.h>
 
@@ -14,12 +13,100 @@ extern TaskManagerRF TaskMgr;
     Implementation file for Arduino Task Manager
 */
 
+// Configuration
+//	Which WiFi channel to use
+#define WIFI_CHANNEL 1
+
 static void radioReceiverTask() {
 	TaskMgr.tmRadioReceiverTask();
 }
 
+//
+// Incoming message queue
+//
+// Design note:  TaskManager will be using _TaskManagerRadioPacket objects to transport data between
+// nodes.  The message queue will send full packets and just absorb whatever returns.
+// Also, the HAL will read/write arbitrary buffers.
+// So:  The HAL will expect a uint8_t* buffer and a size.  It will send or receive it.  The high level
+// routine will pass in the uint8_t* buffer and a size of sizeof(_TaskManagerRadioPacket).  When polling
+// the message queue, it will provide a buffer and a short* in return, even though the short* will always
+// receive sizeof(_TaskManagerRadioPacket)
+// Note that the radio packet will contain a short nodeID and a byte taskID.
+//
 
+// Semaphore to coordinate queue calls (so we don't call add (from the receive callback) while we
+// are in the middle of a remove).
+static SemaphoreHandle_t _TaskManagerMessageQueueSemaphore;
 
+class MessageQueue {
+  private:
+	_TaskManagerRadioPacket m_packets[TASKMGR_MESSAGE_QUEUE_SIZE];
+	short m_lengths[TASKMGR_MESSAGE_QUEUE_SIZE];
+	bool m_isEmpty;
+	short m_head;	// oldest entry
+	short m_tail;	// newest entry
+  public:
+  	MessageQueue(): m_isEmpty(true), m_head(0), m_tail(0) {};
+	bool isEmpty() { return m_isEmpty; }
+	bool add(const uint8_t* dat, const byte len);
+	bool remove(uint8_t* dat, byte* len);
+};
+bool MessageQueue::add(const uint8_t* dat, const byte len) {
+	// if we can't grab the semaphore in a ms, just ignore the message.
+	if(xSemaphoreTake(_TaskManagerMessageQueueSemaphore,1000)==pdFALSE) return false;
+    if(m_isEmpty) {
+        m_isEmpty = false;
+        memcpy(&m_packets[m_tail], dat, sizeof(len));
+        m_lengths[m_tail] = len;
+    } else if (m_head==((m_tail+1)%TASKMGR_MESSAGE_QUEUE_SIZE)) {
+        Serial.print("<ignored>");
+    } else {
+        m_tail = (m_tail+1)%TASKMGR_MESSAGE_QUEUE_SIZE;
+        memcpy(&m_packets[m_tail], dat, sizeof(len));
+        m_lengths[m_tail] = len;
+    }
+    xSemaphoreGive(_TaskManagerMessageQueueSemaphore);
+};
+bool MessageQueue::remove(uint8_t* dat, byte* len) {
+	if(xSemaphoreTake(_TaskManagerMessageQueueSemaphore,1000)==pdFALSE) return false;
+    if(m_isEmpty) {
+		xSemaphoreGive(_TaskManagerMessageQueueSemaphore);
+        printf("<empty>");
+        return false;
+    } else if(m_head==m_tail) {
+        memcpy(dat, &m_packets[m_head], sizeof(_TaskManagerRadioPacket));
+        *len = m_lengths[m_head];
+        m_isEmpty = true;
+    } else {
+        memcpy(dat, &m_packets[m_head], sizeof(_TaskManagerRadioPacket));
+        *len = m_lengths[m_head];
+        m_head = (m_head+1) % TASKMGR_MESSAGE_QUEUE_SIZE;
+    }
+    xSemaphoreGive(_TaskManagerMessageQueueSemaphore);
+    return true;
+};
+
+static MessageQueue _TaskManagerIncomingMessages;
+
+// shared buf for MAC address; last two bytes are set to nodeID
+static byte nodeMac[6] = { 0xA6, 'T', 'M', 0, 0, 0};
+
+//
+// Callbacks
+//
+static void msg_send_cb(const uint8_t* mac, esp_now_send_status_t sendStatus) {
+	// We sent a message to the designated mac.  The message was sent with
+	// sendStatus status.
+
+	// for now, do nothing.
+}
+
+static void msg_recv_cb(const uint8_t *mac, const uint8_t* data, int len) {
+	// We have received a message from the given MAC with the accompanying data.
+	// Save the data in the "incoming message" queue
+	// We don't use taskENTER_CRITICAL here because 'add' does it as needed.
+	_TaskManagerIncomingMessages.add(data, len&0x0ff);
+}
 //
 // Implementation of TaskManagerRF
 //
@@ -27,14 +114,14 @@ static void radioReceiverTask() {
 // Constructor and Destructor
 
 
-TaskManagerRF::TaskManagerRF() {
-	m_rf24 = NULL;
+TaskManagerESP::TaskManagerESP() {
 	m_myNodeId = 0;
 	m_radioReceiverRunning = false;
+	_TaskManagerMessageQueueSemaphore = xSemaphoreCreateBinary();
 }
 
-TaskManagerRF::~TaskManagerRF() {
-	if(m_rf24!=NULL) delete m_rf24;
+TaskManagerESP::~TaskManagerESP() {
+	vSemaphoreDelete(_TaskManagerMessageQueueSemaphore);
 }
 
 // ***************************
@@ -42,18 +129,21 @@ TaskManagerRF::~TaskManagerRF() {
 // ***************************
 
 
-// General purpose receiver.  Gets a message (varying with the kind of radio)
-// then parses and delivers it
-void TaskManagerRF::tmRadioReceiverTask() {
-	static int cnt=0;
+// General purpose receiver.  Checks the message queue for delivered messages and processes the first one
+void TaskManagerESP::tmRadioReceiverTask() {
+	static byte len;
 	// polled receiver -- if there is a packet waiting, grab and process it
 	// receive packet from NRF24.  Poll and process messages
 	// We need to find the destination task and save the fromNode and fromTask.
 	// They are saved on the task instead of the TaskManager object in case several
 	// messages/signals have been received.
-	while(m_rf24->available()) {
+	while(true) {
+		if(_TaskManagerIncomingMessages.isEmpty()) {
+			break;
+		}
 		// read a packet
-		m_rf24->read((void*)(&radioBuf), sizeof(radioBuf));
+		//m_rf24->read((void*)(&radioBuf), sizeof(radioBuf));
+		_TaskManagerIncomingMessages.remove((uint8_t*)&radioBuf, &len);
 		// process it
 		switch(radioBuf.m_cmd) {
 			case tmrNoop:
@@ -87,56 +177,57 @@ void TaskManagerRF::tmRadioReceiverTask() {
 }
 
 // General purpose sender.  Sends a message somewhere (varying with the kind of radio)
-static byte nodeName[6] = "xTMGR";	// shared buf
-bool TaskManagerRF::radioSender(byte destNodeID) {
-	// send packet to NRF24 node "TMGR"+nodeID
-	//static byte nodeName[6] = F("xTMGR");
-	bool ret;
-	m_rf24->stopListening(); delay(50);
-	nodeName[0] = destNodeID;
-	nodeName[4] = 'R'; // was [3]
-	m_rf24->openWritingPipe(nodeName);
-	ret = false;
-	for(int i=0; i<5; i++) {
-		if(m_rf24->write(&radioBuf, sizeof(radioBuf))) {
-			ret = true;
-			break;
-		}
-		else delay(5);
-#if false
-		if(!m_rf24->write(&radioBuf, sizeof(radioBuf))) {
-			Serial.print(F("write fail ")); Serial.println(i);
-		}
-		else {
-			ret = true;
-			break;
-		}
-#endif
-	}
-	m_rf24->startListening();
-	return ret;
+bool TaskManagerESP::radioSender(short destNodeID) {
+
+	nodeMac[4] = (destNodeID>>8)&0x0ff;
+	nodeMac[5] = destNodeID&0x0ff;
+	m_lastESPError = esp_now_send(nodeMac, (byte*)&radioBuf, sizeof(radioBuf)) == ESP_OK;
+	return m_lastESPError == ESP_OK;
 }
 
 // If we have different radio receivers, they will have different instantiation routines.
 
-void TaskManagerRF::radioBegin(byte nodeId, byte cePin, byte csPin) {
-	//uint8_t pipeName[6];
-	m_myNodeId = nodeId;
-	m_rf24 = new RF24(cePin, csPin);
-	//strcpy((char*)pipeName,"xTMGR");	// R for read
-	nodeName[0] = myNodeId();	// (read pipe preconfigure) not printable, who cares...
-	m_rf24->begin();
-	m_rf24->setRetries(15,8); // 4ms betw retries, 8 retries
-	m_rf24->openReadingPipe(1, nodeName);
-	m_rf24->startListening();
-	nodeName[4] = 'R';	// write -- was [3] and 'R'
-	m_rf24->openWritingPipe(nodeName);
-	if(!m_radioReceiverRunning) { add(0xfe, radioReceiverTask); m_radioReceiverRunning = true; }
+bool TaskManagerESP::radioBegin(short nodeID) {
+	// Initialize WiFi system
+	WiFi.mode(WIFI_STA);
+	nodeMac[4] = (nodeID>>8)&0x0ff;
+	nodeMac[5] = nodeID & 0x0ff;
+	m_lastESPError = esp_wifi_set_mac(ESP_IF_WIFI_STA, nodeMac);
+	if(m_lastESPError!=ESP_OK) return false;
+	WiFi.disconnect();
+
+	m_lastESPError = esp_now_init();
+	if(m_lastESPError!=ESP_OK) return false;
+
+	delay(10);
+
+	// register callbacks
+	m_lastESPError = esp_now_register_recv_cb(msg_recv_cb);
+	if(m_lastESPError!=ESP_OK) return false;
+	m_lastESPError = esp_now_register_send_cb(msg_send_cb);
+	if(m_lastESPError!=ESP_OK) return false;
+
+	// final cleanup
+	m_myNodeId = nodeID;
+	m_radioReceiverRunning = true;
+	return true;
 }
 
+bool TaskManagerESP::registerPeer(short nodeID) {
+	// register the partner nodeID as a peer
+	esp_now_peer_info_t peer;
+	nodeMac[4] = (nodeID>>8)&0x0ff;
+	nodeMac[5] = nodeID & 0x0ff;
+	memcpy(peer.peer_addr, &nodeMac, 6);
+	peer.channel = WIFI_CHANNEL;
+	peer.ifidx = ESP_IF_WIFI_STA;
+	peer.encrypt=false;
+	m_lastESPError = esp_now_add_peer(&peer);
+	return m_lastESPError==ESP_OK;
+}
 
-bool TaskManagerRF::sendSignal(byte nodeId, byte sigNum) {
-	if(nodeId==0 || nodeId==myNodeId()) { TaskManager::sendSignal(sigNum); return; }
+bool TaskManagerESP::sendSignal(short nodeId, byte sigNum) {
+	if(nodeId==0 || nodeId==myNodeId()) { TaskManager::sendSignal(sigNum); return true; }
 	radioBuf.m_cmd = tmrSignal;
 	radioBuf.m_fromNodeId = myNodeId();
 	radioBuf.m_fromTaskId = myId();
@@ -144,8 +235,8 @@ bool TaskManagerRF::sendSignal(byte nodeId, byte sigNum) {
 	return radioSender(nodeId);
 }
 
-bool TaskManagerRF::sendSignalAll(byte nodeId, byte sigNum) {
-	if(nodeId==0 || nodeId==myNodeId()) { TaskManager::sendSignalAll(sigNum); return; }
+bool TaskManagerESP::sendSignalAll(short nodeId, byte sigNum) {
+	if(nodeId==0 || nodeId==myNodeId()) { TaskManager::sendSignalAll(sigNum); return true; }
 	radioBuf.m_cmd = tmrSignalAll;
 	radioBuf.m_fromNodeId = myNodeId();
 	radioBuf.m_fromTaskId = myId();
@@ -153,8 +244,8 @@ bool TaskManagerRF::sendSignalAll(byte nodeId, byte sigNum) {
 	return radioSender(nodeId);
 }
 
-bool TaskManagerRF::sendMessage(byte nodeId, byte taskId, char* message) {
-	if(nodeId==0 || nodeId==myNodeId()) { TaskManager::sendMessage(taskId, message); return; }
+bool TaskManagerESP::sendMessage(short nodeId, byte taskId, char* message) {
+	if(nodeId==0 || nodeId==myNodeId()) { TaskManager::sendMessage(taskId, message); return true; }
 	radioBuf.m_cmd = tmrMessage;
 	radioBuf.m_fromNodeId = myNodeId();
 	radioBuf.m_fromTaskId = myId();
@@ -168,9 +259,9 @@ bool TaskManagerRF::sendMessage(byte nodeId, byte taskId, char* message) {
 	return radioSender(nodeId);
 }
 
-bool TaskManagerRF::sendMessage(byte nodeId, byte taskId, void* buf, int len) {
-	if(nodeId==0 || nodeId==myNodeId()) { TaskManager::sendMessage(taskId, buf, len); return; }
-	if(len>TASKMGR_MESSAGE_SIZE) return;	// reject too-long messages
+bool TaskManagerESP::sendMessage(short nodeId, byte taskId, void* buf, int len) {
+	if(nodeId==0 || nodeId==myNodeId()) { TaskManager::sendMessage(taskId, buf, len); return true; }
+	if(len>TASKMGR_MESSAGE_SIZE) return false;	// reject too-long messages
 	radioBuf.m_cmd = tmrMessage;
 	radioBuf.m_fromNodeId = myNodeId();
 	radioBuf.m_fromTaskId = myId();
@@ -179,8 +270,8 @@ bool TaskManagerRF::sendMessage(byte nodeId, byte taskId, void* buf, int len) {
 	return radioSender(nodeId);
 }
 
-bool TaskManagerRF::suspend(byte nodeId, byte taskId) {
-	if(nodeId==0 || nodeId==myNodeId()) { TaskManager::suspend(taskId); return; }
+bool TaskManagerESP::suspend(short nodeId, byte taskId) {
+	if(nodeId==0 || nodeId==myNodeId()) { TaskManager::suspend(taskId); return true; }
 	radioBuf.m_cmd = tmrSuspend;
 	radioBuf.m_fromNodeId = myNodeId();
 	radioBuf.m_fromTaskId = myId();
@@ -188,8 +279,8 @@ bool TaskManagerRF::suspend(byte nodeId, byte taskId) {
 	return radioSender(nodeId);
 }
 
-bool TaskManagerRF::resume(byte nodeId, byte taskId) {
-	if(nodeId==0 || nodeId==myNodeId()) { TaskManager::resume(taskId); return; }
+bool TaskManagerESP::resume(short nodeId, byte taskId) {
+	if(nodeId==0 || nodeId==myNodeId()) { TaskManager::resume(taskId); return true; }
 	radioBuf.m_cmd = tmrResume;
 	radioBuf.m_fromNodeId = myNodeId();
 	radioBuf.m_fromTaskId = myId();
@@ -197,7 +288,7 @@ bool TaskManagerRF::resume(byte nodeId, byte taskId) {
 	return radioSender(nodeId);
 }
 
-void TaskManagerRF::getSource(byte& fromNodeId, byte& fromTaskId) {
+void TaskManagerESP::getSource(short& fromNodeId, byte& fromTaskId) {
 	fromNodeId = m_theTasks.front().m_fromNodeId;
 	fromTaskId = m_theTasks.front().m_fromTaskId;
 }
