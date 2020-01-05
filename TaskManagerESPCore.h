@@ -21,29 +21,33 @@
     This defines the maximum size for an inter-task message.  It is constrained, in part,
     by plans for RFI communication between tasks running on different devices.
 
-    Note that the NRF24's max payload size is 32.  Message overhead is 3 bytes.
+    Note that the ESP-NOW's max payload size is 25.  Message overhead is 4 bytes.
 */
 
-#define TASKMGR_MESSAGE_SIZE (250-4)
+// TASKMGR_MESSAGE_SIZE calc:  esp-now packet size - 4 (cmd, from task/node) - 1 (first byte is to task)
+// Note this is the user message size...
+//#define ESP_NOW_MESSAGE_SIZE 250
+//#define TASKMGR_MESSAGE_SIZE (ESP_NOW_MESSAGE_SIZE-4-1)
 #define TASKMGR_MESSAGE_QUEUE_SIZE 10
 
 
 /*!	\struct	_TaskManagerRadioPacket
 	A packet of information being sent by radio between two TaskManager nodes
 */
+// Note we reorder things becuase ESP32 uses 16 bit boundaries when packing things.
 struct _TaskManagerRadioPacket {
 	byte	m_cmd;							//!< Command information
-	short	m_fromNodeId;						// source node
 	byte	m_fromTaskId;						// source task
-	byte	m_data[TASKMGR_MESSAGE_SIZE];	//! The data being transmitted.
+	tm_nodeId_t	m_fromNodeId;						// source node
+	byte	m_data[TASKMGR_MESSAGE_SIZE+1];	//! The data being transmitted.
 		// reminder:  signal -> [0] is the signum
-		//			  msg -> [0] is the taskID of the To, data starts at [1]
+		//			  msg -> [0] is the taskID of the To, user data starts at [1]
 		//			  suspend/resume -> [0] is the taskID to suspend/resume
 };
 
 // This is where we build MAC data for setting our MAC and pairing setup
 // It has enough constant data that it is easier to just keep one around.
-static byte _TaskManagerMAC[] = { 0xA6, 'T', 'M',  0x45, 0x00, 0x00 };
+static byte _TaskManagerMAC[] = { 0xA6, 'T', 'M',  0, 0x00, 0x00 };
 
 /**********************************************************************************************************/
 
@@ -60,7 +64,7 @@ static byte _TaskManagerMAC[] = { 0xA6, 'T', 'M',  0x45, 0x00, 0x00 };
 class TaskManagerESP: public TaskManager {
 
 private:
-	int		m_myNodeId;			// radio node number. 0 if radio not enabled.
+	tm_nodeId_t		m_myNodeId;			// radio node number. 0 if radio not enabled.
 
 public:
 	// Constructor and destructor
@@ -97,7 +101,7 @@ public:
 		\param sigNum -- The value of the signal to be sent
 		\sa yieldForSignal(), sendSignalAll(), addWaitSignal, addAutoWaitSignal()
 	*/
-	bool sendSignal(short nodeId, byte sigNum);
+	bool sendSignal(tm_nodeId_t nodeId, byte sigNum);
 
 	/*! \brief Send a signal to all tasks that are waiting for this particular signal.
 
@@ -106,7 +110,7 @@ public:
 		\sa sendSignal(), yieldForSiganl(), addWaitSignal(), addAutoWaitSignal()
 	*/
 
-	bool sendSignalAll(short nodeId, byte sigNum);
+	bool sendSignalAll(tm_nodeId_t nodeId, byte sigNum);
 
 	/*! \brief  Sends a string message to a task
 
@@ -124,7 +128,7 @@ public:
 		TASKMGR_MESSAGE_LENGTH-1 characters.
 		\sa yieldForMessage()
 	*/
-	bool sendMessage(short nodeId, byte taskId, char* message);
+	bool sendMessage(tm_nodeId_t nodeId, byte taskId, char* message);
 
 	/*! \brief Send a binary message to a task
 
@@ -141,7 +145,7 @@ public:
 		\sa yieldForMessage()
 	*/
 
-	bool sendMessage(short nodeId, byte taskId, void* buf, int len);
+	bool sendMessage(tm_nodeId_t nodeId, byte taskId, void* buf, int len);
 
 	/*!	\brief Get source node/task of last message/signal
 
@@ -152,7 +156,7 @@ public:
 		\param[out] fromNodeId -- the nodeId that sent the last message or signal
 		\param[out] fromTaskId -- the taskId that sent the last message or signal
 	*/
-	void getSource(short& fromNodeId, byte& fromTaskId);
+	void getSource(tm_nodeId_t& fromNodeId, byte& fromTaskId);
 
 	/*! @} */
 
@@ -169,7 +173,7 @@ public:
 		\note Not implemented.
 		\sa resume()
 	*/
-	bool suspend(short nodeId, byte taskId);			// node, task
+	bool suspend(tm_nodeId_t nodeId, byte taskId);			// node, task
 
 	/*!	\brief Resume the given task on the given node
 
@@ -180,12 +184,12 @@ public:
 		\note Not implemented.
 		\sa suspend()
 	*/
-	bool resume(short nodeId, byte taskId);			// node, task
+	bool resume(tm_nodeId_t nodeId, byte taskId);			// node, task
 	/*! @} */
 
 
 private:
-	bool radioSender(short);	// generic packet sender
+	bool radioSender(tm_nodeId_t);	// generic packet sender
 
     // status requests/
     //void yieldPingNode(byte);					// node -> status (responding/not responding)
@@ -231,13 +235,13 @@ public:
 
 		\param nodeId -- the node the message is sent to
 	*/
-	bool radioBegin(short nodeId);
+	bool radioBegin(tm_nodeId_t nodeId);
 
 	/* \brief Add a peer for ESP-Now communications
 
 		\param nodeID -- A peer node for future communications.
 	*/
-	bool registerPeer(short nodeId);
+	bool registerPeer(tm_nodeId_t nodeId);
 
 	/* \brief Get the last ESP error indicator
 
@@ -258,7 +262,7 @@ public:
 		\return The byte value that is the current node's radio ID.  If the radio has not been
 		enabled, returns 0.
 	*/
-    short myNodeId();
+    tm_nodeId_t myNodeId();
     /*! @} */
 };
 
@@ -271,7 +275,7 @@ public:
 // Inline stuff
 //
 
-inline short TaskManagerESP::myNodeId() {
+inline tm_nodeId_t TaskManagerESP::myNodeId() {
 	return m_myNodeId;
 }
 
