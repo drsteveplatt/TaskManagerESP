@@ -84,9 +84,7 @@ class MessageQueue {
 };
 bool MessageQueue::add(const uint8_t* dat, const byte len) {
 	// if we can't grab the semaphore in a ms, just ignore the message.
-	//if(DEBUG) Serial << "-->MessageQueue::add\n";
 	if(xSemaphoreTake(_TaskManagerMessageQueueSemaphore,1000)==pdFALSE) {
-	//	if(DEBUG) Serial << "Semaphore Take failed\n<--MessageQueue:add\n";
 		return false;
 	}
     if(m_isEmpty) {
@@ -100,14 +98,9 @@ bool MessageQueue::add(const uint8_t* dat, const byte len) {
         memcpy(&m_packets[m_tail], dat, len);
         m_lengths[m_tail] = len;
     }
-    //if(DEBUG) Serial << "New packet added at " << m_tail << "len is " << len << endl;
-    //if(DEBUG) dumpBuf((uint8_t*)&m_packets[m_tail], len);
-    //if(DEBUG) Serial << endl;
     xSemaphoreGive(_TaskManagerMessageQueueSemaphore);
-    //if(DEBUG) Serial << "<--MessageQueue::add\n";
 };
 bool MessageQueue::remove(uint8_t* dat, byte* len) {
-	if(DEBUG) Serial << "-->MessageQueue::remove\n";
 	int t_at, t_len;
 	if(xSemaphoreTake(_TaskManagerMessageQueueSemaphore,1000)==pdFALSE) return false;
     if(m_isEmpty) {
@@ -126,9 +119,6 @@ bool MessageQueue::remove(uint8_t* dat, byte* len) {
         m_head = (m_head+1) % TASKMGR_MESSAGE_QUEUE_SIZE;
     }
     xSemaphoreGive(_TaskManagerMessageQueueSemaphore);
-    if(DEBUG) Serial << "Removed packet at " << t_at << " len is " << t_len
-    	<< " new queue size " << size() << " isEmpty: " << (isEmpty() ? "True" : "False") << endl;
-    if(DEBUG) Serial << "<--MessageQueue::remove\n";
     return true;
 };
 
@@ -189,16 +179,19 @@ void TaskManagerESP::tmRadioReceiverTask() {
 	// We need to find the destination task and save the fromNode and fromTask.
 	// They are saved on the task instead of the TaskManager object in case several
 	// messages/signals have been received.
-	while(true) {
+//	while(true) {
 		if(_TaskManagerIncomingMessages.isEmpty()) {
-			break;
+//			break;
+			return;
 		}
-		if(DEBUG) Serial << "-->TaskManagerESP:tmRadioReceiverTask has a message\n";
+		if(DEBUG) Serial << "-->TaskManagerESP:tmRadioReceiverTask has a message, msg queue len is "
+			<< _TaskManagerIncomingMessages.size() << endl;
 		if(DEBUG) Serial << "Pulling message from queue\n";
 		// read a packet
 		//m_rf24->read((void*)(&radioBuf), sizeof(radioBuf));
 		_TaskManagerIncomingMessages.remove((uint8_t*)&radioBuf, &len);
-		if(DEBUG) Serial << "Received message, len is " << len << endl;
+		if(DEBUG) Serial << "Received message, len is " << len << " new msg quee size is "
+			<< _TaskManagerIncomingMessages.size() << endl;
 		//if(DEBUG) dumpBuf((uint8_t*)&radioBuf, len);
 		//if(DEBUG) Serial << endl;
 		// process it
@@ -220,7 +213,7 @@ void TaskManagerESP::tmRadioReceiverTask() {
 				TaskManager::sendSignalAll(radioBuf.m_data[0]);
 				break;
 			case tmrMessage:
-				if(DEBUG) Serial << "internalSendMessage from node/task" << radioBuf.m_fromNodeId
+				if(DEBUG) Serial << " Message from node/task " << radioBuf.m_fromNodeId
 					<< "/" << radioBuf.m_fromTaskId
 					<< " to task " << radioBuf.m_data[0] << endl;
 				internalSendMessage(radioBuf.m_fromNodeId, radioBuf.m_fromTaskId,
@@ -234,20 +227,14 @@ void TaskManagerESP::tmRadioReceiverTask() {
 				break;
 		} // end switch
 		if(DEBUG) Serial << "<--TaskManager:tmRadioReceiverTask finished a message\n";
-	}  // end while true
+//	}  // end while true
 }
 
 // General purpose sender.  Sends a message somewhere (varying with the kind of radio)
 bool TaskManagerESP::radioSender(tm_nodeId_t destNodeID) {
-	if(DEBUG) Serial << "-->radioSender, radioBuf len is " << sizeof(radioBuf) << endl;
-	if(DEBUG) dumpMac(nodeMac);
-	if(DEBUG) Serial << endl;
-	//if(DEBUG) dumpBuf((byte*)&radioBuf, sizeof(radioBuf));
 	nodeMac[4] = (destNodeID>>8)&0x0ff;
 	nodeMac[5] = destNodeID&0x0ff;
 	m_lastESPError = esp_now_send(nodeMac, (byte*)&radioBuf, sizeof(radioBuf));
-	if(DEBUG) Serial << "Message sent, err is " << m_lastESPError << endl;
-	if(DEBUG) Serial << "<--radioSender\n";
 	if(m_lastESPError!=ESP_OK) Serial << "***ERR " << espErrText(m_lastESPError) << "***\n";
 	return m_lastESPError == ESP_OK;
 }
@@ -256,14 +243,12 @@ bool TaskManagerESP::radioSender(tm_nodeId_t destNodeID) {
 
 bool TaskManagerESP::radioBegin(tm_nodeId_t nodeID) {
 	// Initialize WiFi system
-	if(DEBUG) Serial << "-->radioBegin\n";
 	WiFi.mode(WIFI_STA);
 	nodeMac[4] = (nodeID>>8)&0x0ff;
 	nodeMac[5] = nodeID & 0x0ff;
 	m_lastESPError = esp_wifi_set_mac(ESP_IF_WIFI_STA, nodeMac);
 	if(m_lastESPError!=ESP_OK) return false;
 	WiFi.disconnect();
-	if(DEBUG) { Serial << "Registered my MAC as "; dumpMac(nodeMac); Serial << endl; }
 	m_lastESPError = esp_now_init();
 	if(m_lastESPError!=ESP_OK) return false;
 
@@ -284,13 +269,11 @@ bool TaskManagerESP::radioBegin(tm_nodeId_t nodeID) {
 	// final cleanup
 	m_myNodeId = nodeID;
 	m_radioReceiverRunning = true;
-	if(DEBUG) Serial << "<--radioBegin (good exit)\n";
 	return true;
 }
 
 bool TaskManagerESP::registerPeer(tm_nodeId_t nodeID) {
 	// register the partner nodeID as a peer
-	if(DEBUG) Serial << "-->registerPeer\n";
 	esp_now_peer_info_t peer;
 	nodeMac[4] = (nodeID>>8)&0x0ff;
 	nodeMac[5] = nodeID & 0x0ff;
@@ -298,10 +281,7 @@ bool TaskManagerESP::registerPeer(tm_nodeId_t nodeID) {
 	peer.channel = WIFI_CHANNEL;
 	peer.ifidx = ESP_IF_WIFI_STA;
 	peer.encrypt=false;
-	if(DEBUG) { Serial << "Registering "; dumpMac(peer.peer_addr); Serial << endl;}
 	m_lastESPError = esp_now_add_peer(&peer);
-	if(DEBUG) Serial << "Registration returned " << m_lastESPError << endl;
-	if(DEBUG) Serial << "<--registerPeer\n";
 	return m_lastESPError==ESP_OK;
 }
 
