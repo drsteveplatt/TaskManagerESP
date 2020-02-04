@@ -272,16 +272,24 @@ bool TaskManagerESP::radioBegin(tm_nodeId_t nodeID) {
 	return true;
 }
 
-bool TaskManagerESP::registerPeer(tm_nodeId_t nodeID) {
+bool TaskManagerESP::registerPeer(tm_nodeId_t nodeId) {
 	// register the partner nodeID as a peer
 	esp_now_peer_info_t peer;
-	nodeMac[4] = (nodeID>>8)&0x0ff;
-	nodeMac[5] = nodeID & 0x0ff;
+	nodeMac[4] = (nodeId>>8)&0x0ff;
+	nodeMac[5] = nodeId & 0x0ff;
 	memcpy(peer.peer_addr, &nodeMac, 6);
 	peer.channel = WIFI_CHANNEL;
 	peer.ifidx = ESP_IF_WIFI_STA;
 	peer.encrypt=false;
 	m_lastESPError = esp_now_add_peer(&peer);
+	return m_lastESPError==ESP_OK;
+}
+
+bool TaskManagerESP::unRegisterPeer(tm_nodeId_t nodeId){
+	// unregister the partner nodeID as a peer
+	nodeMac[4] = (nodeId>>8)&0x0ff;
+	nodeMac[5] = nodeId & 0x0ff;
+	m_lastESPError = esp_now_del_peer(nodeMac);
 	return m_lastESPError==ESP_OK;
 }
 

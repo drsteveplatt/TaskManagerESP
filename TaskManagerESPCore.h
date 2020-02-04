@@ -243,6 +243,11 @@ public:
 	*/
 	bool registerPeer(tm_nodeId_t nodeId);
 
+	/*	\brief Remove a peer from ESP-Now communications
+		\param nodeID -- A peer node that will no longer be usable as a peer
+	*/
+	bool unRegisterPeer(tm_nodeId_t nodeId);
+
 	/* \brief Get the last ESP error indicator
 
 		Returns an esp_err_t value of the return status of the last completed ESP operation.
