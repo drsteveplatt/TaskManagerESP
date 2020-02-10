@@ -82,8 +82,14 @@ class MessageQueue {
 		else return (m_head+TASKMGR_MESSAGE_QUEUE_SIZE)-m_tail;
 	}
 };
+struct tmpStruct { byte cmd; byte fromTaskId; tm_nodeId_t fromNodeId; byte ffcmd; uint32_t seq; };
 bool MessageQueue::add(const uint8_t* dat, const byte len) {
 	// if we can't grab the semaphore in a ms, just ignore the message.
+	tmpStruct* ts;
+	ts = (tmpStruct*)dat;
+	if(DEBUG) Serial << "-->MessageQueue::add cmd: " << ts->cmd
+		<< " from: " << ts->fromNodeId << ' ' << ts->fromTaskId
+		<< " ffcmd: " << ts->ffcmd << " ffseq: " << ts->seq << endl;
 	if(xSemaphoreTake(_TaskManagerMessageQueueSemaphore,1000)==pdFALSE) {
 		return false;
 	}
@@ -99,6 +105,7 @@ bool MessageQueue::add(const uint8_t* dat, const byte len) {
         m_lengths[m_tail] = len;
     }
     xSemaphoreGive(_TaskManagerMessageQueueSemaphore);
+    if(DEBUG) Serial << "<--MessageQueue::add\n";
 };
 bool MessageQueue::remove(uint8_t* dat, byte* len) {
 	int t_at, t_len;
@@ -142,8 +149,6 @@ static void msg_recv_cb(const uint8_t *mac, const uint8_t* data, int len) {
 	// Save the data in the "incoming message" queue
 	// We don't use taskENTER_CRITICAL here because 'add' does it as needed.
 	if(DEBUG) Serial << "-->msg_recv_cb\nreceived message\n";
-	if(DEBUG) dumpBuf(data, len);
-	if(DEBUG) Serial << endl;
 	_TaskManagerIncomingMessages.add(data, len&0x0ff);
 	if(DEBUG) Serial << "Queue is now " << (_TaskManagerIncomingMessages.isEmpty() ? " " : "not ") << "empty\n";
 	if(DEBUG) Serial << "Queue size is now " << _TaskManagerIncomingMessages.size() << endl;
@@ -184,16 +189,10 @@ void TaskManagerESP::tmRadioReceiverTask() {
 //			break;
 			return;
 		}
-		if(DEBUG) Serial << "-->TaskManagerESP:tmRadioReceiverTask has a message, msg queue len is "
-			<< _TaskManagerIncomingMessages.size() << endl;
-		if(DEBUG) Serial << "Pulling message from queue\n";
+		if(DEBUG) "-->TaskManagerESP::tmRadioReceiverTask\n";
 		// read a packet
 		//m_rf24->read((void*)(&radioBuf), sizeof(radioBuf));
 		_TaskManagerIncomingMessages.remove((uint8_t*)&radioBuf, &len);
-		if(DEBUG) Serial << "Received message, len is " << len << " new msg quee size is "
-			<< _TaskManagerIncomingMessages.size() << endl;
-		//if(DEBUG) dumpBuf((uint8_t*)&radioBuf, len);
-		//if(DEBUG) Serial << endl;
 		// process it
 		switch(radioBuf.m_cmd) {
 			case tmrNoop:
@@ -213,9 +212,6 @@ void TaskManagerESP::tmRadioReceiverTask() {
 				TaskManager::sendSignalAll(radioBuf.m_data[0]);
 				break;
 			case tmrMessage:
-				if(DEBUG) Serial << " Message from node/task " << radioBuf.m_fromNodeId
-					<< "/" << radioBuf.m_fromTaskId
-					<< " to task " << radioBuf.m_data[0] << endl;
 				internalSendMessage(radioBuf.m_fromNodeId, radioBuf.m_fromTaskId,
 					radioBuf.m_data[0], &radioBuf.m_data[1], TASKMGR_MESSAGE_SIZE);
 				break;
@@ -227,6 +223,8 @@ void TaskManagerESP::tmRadioReceiverTask() {
 				break;
 		} // end switch
 		if(DEBUG) Serial << "<--TaskManager:tmRadioReceiverTask finished a message\n";
+		if(DEBUG) Serial << "   Queue is now " << (_TaskManagerIncomingMessages.isEmpty() ? " " : "not ") << "empty\n";
+		if(DEBUG) Serial << "   Queue size is now " << _TaskManagerIncomingMessages.size() << endl;
 //	}  // end while true
 }
 
@@ -327,16 +325,11 @@ bool TaskManagerESP::sendMessage(tm_nodeId_t nodeId, byte taskId, char* message)
 }
 
 bool TaskManagerESP::sendMessage(tm_nodeId_t nodeId, byte taskId, void* buf, int len) {
-	if(DEBUG) Serial << "-->TaskManager::sendMessage(1)\n";
 	if(nodeId==0 || nodeId==myNodeId()) {
 		TaskManager::sendMessage(taskId, buf, len);
-		if(DEBUG) Serial << "sent to local node\n<--TaskManager::sendMessage(1)\n";
 		return true;
 	}
-	if(DEBUG) Serial << "sending to remote node\n";
 	if(len>TASKMGR_MESSAGE_SIZE) {
-		if(DEBUG) Serial << "packet size (" << len << ") too large, >" << TASKMGR_MESSAGE_SIZE
-				<< "\n<--TaskManager::sendMessage(1)\n";
 		return false;	// reject too-long messages
 	}
 	radioBuf.m_cmd = tmrMessage;
@@ -344,12 +337,7 @@ bool TaskManagerESP::sendMessage(tm_nodeId_t nodeId, byte taskId, void* buf, int
 	radioBuf.m_fromTaskId = myId();
 	radioBuf.m_data[0] = taskId;	// who we are sending it to
 	memcpy(&radioBuf.m_data[1], buf, len);
-	if(DEBUG) Serial << "sending message\n";
 	bool ret = radioSender(nodeId);
-	if(DEBUG) {
-		Serial << "message send " << (ret ? "succeeded\n" : "failed\n");
-		Serial << "<--TaskManager::sendMessage(1)\n";
-	}
 	return ret;
 }
 
