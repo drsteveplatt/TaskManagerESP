@@ -239,14 +239,44 @@ bool TaskManagerESP::radioSender(tm_nodeId_t destNodeID) {
 
 // If we have different radio receivers, they will have different instantiation routines.
 
-bool TaskManagerESP::radioBegin(tm_nodeId_t nodeID) {
-	// Initialize WiFi system
-	WiFi.mode(WIFI_STA);
+bool TaskManagerESP::radioBegin(tm_nodeId_t nodeID, char* ssid, char* pw) {
+	// Initialize ESP-NOW and WiFi system
+	WiFi.mode(ssid==NULL ? WIFI_STA : WIFI_AP_STA);
 	nodeMac[4] = (nodeID>>8)&0x0ff;
 	nodeMac[5] = nodeID & 0x0ff;
 	m_lastESPError = esp_wifi_set_mac(ESP_IF_WIFI_STA, nodeMac);
 	if(m_lastESPError!=ESP_OK) return false;
-	WiFi.disconnect();
+	if(ssid==NULL) {
+		// ESP-NOW only
+		WiFi.disconnect();
+	} else {
+		// ESP-NOW, but project uses WiFi
+		// Get channel
+		int32_t channel;
+		channel = 0;
+	  	if (int32_t n = WiFi.scanNetworks()) {
+		  for (uint8_t i=0; i<n; i++) {
+			if (!strcmp(ssid, WiFi.SSID(i).c_str())) {
+			  channel = WiFi.channel(i);
+			} // end if
+		  } // end for each found network entry
+	  	} // end if there are any network entries
+		// Set our channel
+		esp_wifi_set_promiscuous(true);
+		esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
+  		esp_wifi_set_promiscuous(false);
+		if(pw!=NULL) {
+			// we need to configure the WiFi link to the access point
+			WiFi.begin(ssid, pw);
+			for(int i=0; i<10 && WiFi.status()!=WL_CONNECTED; i++) delay(500);
+			if(WiFi.status()!=WL_CONNECTED) return false;
+		} else {
+			WiFi.disconnect();
+		}
+	}
+	/////
+
+	/////
 	m_lastESPError = esp_now_init();
 	if(m_lastESPError!=ESP_OK) return false;
 

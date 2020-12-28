@@ -110,11 +110,38 @@ public:
 		\sa sendSignal(), yieldForSiganl(), addWaitSignal(), addAutoWaitSignal()
 	*/
 
+	/*!	\brief  Sends a signal to a task
+
+		Sends a signal to a task running on this node.  The signal will go to only one task.
+		If there are several tasks on the node waiting on the signal, it will go to
+		the first task found that is waiting for this particular signal.  Note that once a task is signalled, it will not be waiting for
+		other instances of the same siggnal number.
+
+		\param sigNum -- The value of the signal to be sent
+		\sa yieldForSignal(), sendSignalAll(), addWaitSignal, addAutoWaitSignal()
+	*/
+	bool sendSignal(byte sigNum) { sendSignal(0, sigNum); }
+
+	/*! \brief Send a signal to all tasks on a different node that are waiting for this particular signal.
+
+		Signals all tasks that are waiting for signal <i>sigNum</i>.
+		\param sigNum -- The signal number to be sent
+		\sa sendSignal(), yieldForSiganl(), addWaitSignal(), addAutoWaitSignal()
+	*/
+
 	bool sendSignalAll(tm_nodeId_t nodeId, byte sigNum);
+
+	/*! \brief Send a signal to all tasks on this node that are waiting for this particular signal.
+
+		Signals all tasks that are waiting for signal <i>sigNum</i>.
+		\sa sendSignal(), yieldForSiganl(), addWaitSignal(), addAutoWaitSignal()
+	*/
+
+	bool sendSignalAll(byte sigNum) { sendSignalAll(0, sigNum); }
 
 	/*! \brief  Sends a string message to a task
 
-		Sends a message to a task.  The message will go to only one task.
+		Sends a message to a task running on a different node.  The message will go to only one task.
 
 		Note that once a task has been sent a message, it will not be waiting for
 		other instances of the same siggnal number.
@@ -130,9 +157,27 @@ public:
 	*/
 	bool sendMessage(tm_nodeId_t nodeId, byte taskId, char* message);
 
+	/*! \brief  Sends a string message to a task
+
+		Sends a message to a task running on this node.  The message will go to only one task.
+
+		Note that once a task has been sent a message, it will not be waiting for
+		other instances of the same siggnal number.
+		Note that additional messages sent prior to the task executing will overwrite any prior messages.
+		Messages that are too large are ignored.  Remember to account for the trailing '\n'
+		when considering the string message size.
+
+		\param taskId -- the ID number of the task
+		\param message -- the character string message.  It is restricted in length to
+		TASKMGR_MESSAGE_LENGTH-1 characters.
+		\sa yieldForMessage()
+	*/
+
+	bool sendMessage(byte taskId, char* message) { sendMessage(0, taskId, message); }
+
 	/*! \brief Send a binary message to a task
 
-		Sends a message to a task.  The message will go to only one task.
+		Sends a message to a task on a different node.  The message will go to only one task.
 		Note that once a task has been sent a message, it will not be waiting for
 		other instances of the same signal number.  Messages that are too large are
 		ignored.
@@ -146,6 +191,23 @@ public:
 	*/
 
 	bool sendMessage(tm_nodeId_t nodeId, byte taskId, void* buf, int len);
+
+	/*! \brief Send a binary message to a task
+
+		Sends a message to a task on this node.  The message will go to only one task.
+		Note that once a task has been sent a message, it will not be waiting for
+		other instances of the same signal number.  Messages that are too large are
+		ignored.
+
+		Note that additional messages sent prior to the task executing will overwrite any prior messages.
+		\param taskId -- the ID number of the task
+		\param buf -- A pointer to the structure that is to be passed to the task
+		\param len -- The length of the buffer.  Buffers can be at most TASKMGR_MESSAGE_LENGTH
+		bytes long.
+		\sa yieldForMessage()
+	*/
+
+	bool sendMessage(byte taskId, void* buf, int len) { sendMessage(0, taskId, buf, len); }
 
 	/*!	\brief Get source node/task of last message/signal
 
@@ -165,7 +227,7 @@ public:
 
 	/*!	\brief Suspend the given task on the given node
 
-		Suspends a task on any node.  If nodeID==0, it suspends a task on this node. If the node or task
+		Suspends a task on a different node.  If nodeID==0, it suspends a task on this node. If the node or task
 		do not exist, nothing happens.  If the task was already suspended, it remains suspended.
 		\param nodeId The node containing the task
 		\param taskId The task to be suspended
@@ -175,9 +237,21 @@ public:
 	*/
 	bool suspend(tm_nodeId_t nodeId, byte taskId);			// node, task
 
+	/*!	\brief Suspend the given task on the given node
+
+		Suspends a task on this node.  If nodeID==0, it suspends a task on this node. If the node or task
+		do not exist, nothing happens.  If the task was already suspended, it remains suspended.
+		\param nodeId The node containing the task
+		\param taskId The task to be suspended
+
+		\note Not implemented.
+		\sa resume()
+	*/
+	bool suspend(byte taskId) { suspend(0, taskId); }
+
 	/*!	\brief Resume the given task on the given node
 
-		Resumes a task on any node.  If nodeID==0, it resumes a task on this node.  If the node or task
+		Resumes a task on another node.  If nodeID==0, it resumes a task on this node.  If the node or task
 		do not exist, nothing happens.  If the task had not been suspended, nothing happens.
 		\param nodeId The node containnig the task
 		\param taskId The task to be resumed
@@ -185,6 +259,19 @@ public:
 		\sa suspend()
 	*/
 	bool resume(tm_nodeId_t nodeId, byte taskId);			// node, task
+
+	/*!	\brief Resume the given task on the given node
+
+		Resumes a task on this node.  If nodeID==0, it resumes a task on this node.  If the node or task
+		do not exist, nothing happens.  If the task had not been suspended, nothing happens.
+		\param nodeId The node containnig the task
+		\param taskId The task to be resumed
+		\note Not implemented.
+		\sa suspend()
+	*/
+	bool resume(byte taskId) { resume(0, taskId); }
+
+
 	/*! @} */
 
 
@@ -231,11 +318,24 @@ public:
 
 		Set up the ESP-32 ESP-Now configuration set our radio node ID.
 
+		There are three variants:  radioBegin(nodeId), radioBegin(nodeId, ssId), radioBegin(nodeId, ssid, pw).
+
+		The first is used when all of the nodes of a project are only using ESP-NOW.
+		It closes the WiFi connection after ESP-NOW has been configured.
+
+		The second is used if this node is ESP-NOW-only, but another node in the project (which this node is communicating with)
+		is using WiFi.  It configures ESP-NOW to use the same channel as the WiFi node, but closes WiFi for this node.
+
+		The third is used if this node is using both ESP-NOW and WiFi.  It configures both ESP-NOW and WiFi, acquires an IP address,
+		and leaves WiFi open for later use.
+
 		Note that additional messages sent prior to the task executing will overwrite any prior messages.
 
 		\param nodeId -- the node the message is sent to
+		\param ssid -- the ssid of the local WiFi node (if using WiFi in a project).
+		\param pw -- the password of the local WiFi node (if using WiFi from this node).
 	*/
-	bool radioBegin(tm_nodeId_t nodeId);
+	bool radioBegin(tm_nodeId_t nodeId, char* ssid=NULL, char* pw=NULL);
 
 	/* \brief Add a peer for ESP-Now communications
 
