@@ -215,6 +215,16 @@ public:
 		to the current task.  If the current task has never received a signal, returns [0 0].
 		If the last message/signal was from "this" node, returns fromNodeId=0.
 
+		\param[out] fromTaskId -- the taskId that sent the last message or signal
+	*/
+	void getSource(byte& fromTaskId) { TaskManager::getSource(fromTaskId); }
+
+	/*!	\brief Get source node/task of last message/signal
+
+		Returns the nodeId and taskId of the node/task that last sent a signal or message
+		to the current task.  If the current task has never received a signal, returns [0 0].
+		If the last message/signal was from "this" node, returns fromNodeId=0.
+
 		\param[out] fromNodeId -- the nodeId that sent the last message or signal
 		\param[out] fromTaskId -- the taskId that sent the last message or signal
 	*/
