@@ -239,7 +239,7 @@ bool TaskManagerESP::radioSender(tm_nodeId_t destNodeID) {
 
 // If we have different radio receivers, they will have different instantiation routines.
 
-bool TaskManagerESP::radioBegin(tm_nodeId_t nodeID, char* ssid, char* pw) {
+bool TaskManagerESP::radioBegin(tm_nodeId_t nodeID, const char* ssid, const char* pw) {
 	// Initialize ESP-NOW and WiFi system
 	WiFi.mode(ssid==NULL ? WIFI_STA : WIFI_AP_STA);
 	nodeMac[4] = (nodeID>>8)&0x0ff;

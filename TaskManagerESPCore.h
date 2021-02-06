@@ -21,7 +21,7 @@
     This defines the maximum size for an inter-task message.  It is constrained, in part,
     by plans for RFI communication between tasks running on different devices.
 
-    Note that the ESP-NOW's max payload size is 25.  Message overhead is 4 bytes.
+    Note that the ESP-NOW's max payload size is 240.  Message overhead is 4 bytes.
 */
 
 // TASKMGR_MESSAGE_SIZE calc:  esp-now packet size - 4 (cmd, from task/node) - 1 (first byte is to task)
@@ -29,7 +29,6 @@
 //#define ESP_NOW_MESSAGE_SIZE 250
 //#define TASKMGR_MESSAGE_SIZE (ESP_NOW_MESSAGE_SIZE-4-1)
 #define TASKMGR_MESSAGE_QUEUE_SIZE 10
-
 
 /*!	\struct	_TaskManagerRadioPacket
 	A packet of information being sent by radio between two TaskManager nodes
@@ -345,7 +344,7 @@ public:
 		\param ssid -- the ssid of the local WiFi node (if using WiFi in a project).
 		\param pw -- the password of the local WiFi node (if using WiFi from this node).
 	*/
-	bool radioBegin(tm_nodeId_t nodeId, char* ssid=NULL, char* pw=NULL);
+	bool radioBegin(tm_nodeId_t nodeId, const char* ssid=NULL, const char* pw=NULL);
 
 	/* \brief Add a peer for ESP-Now communications
 
