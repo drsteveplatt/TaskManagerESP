@@ -12,7 +12,7 @@ extern TaskManagerESP TaskMgr;
 
 #include <Streaming.h>
 
-/*! \file TaskManagerRF.cpp
+/*! \file TaskManagerESP.cpp
     Implementation file for Arduino Task Manager
 */
 
