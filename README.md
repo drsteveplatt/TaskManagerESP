@@ -1,4 +1,11 @@
 # TaskManagerESP
+
+# ALERT ALERT ALERT
+TaskManagerESP has been merged completely into TaskManager.
+This repository will be kept public for a period in transition, but it eventually will be deleted.
+Please move to the most recent version of TaskManager.
+# END ALERT
+
 RF communications module for TaskManager
 
 This module extends TaskManager to allow for communications between nodes.  It is based on 
